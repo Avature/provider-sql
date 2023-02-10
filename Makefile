@@ -29,7 +29,7 @@ IMAGES = $(PROJECT_NAME) $(PROJECT_NAME)-controller
 build.crossplane.package:
 	kubectl crossplane build provider -f ./package
 
-push.crossplane.package: build.provider
+push.crossplane.package: build.crossplane.package
 	kubectl crossplane push provider -f ./package/provider-sql-$(VERSION) alereca/provider-sql-controller-amd64:$(VERSION)
 
 fallthrough: submodules
