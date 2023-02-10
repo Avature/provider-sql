@@ -31,4 +31,4 @@ metadata:
     friendly-kind-name.meta.crossplane.io/user.mysql.sql.crossplane.io: User
 spec:
   controller:
-    image: crossplane/provider-sql-controller:VERSION
+    image: alereca/provider-sql-controller:VERSION
