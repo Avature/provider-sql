@@ -27,10 +27,10 @@ IMAGES = $(PROJECT_NAME) $(PROJECT_NAME)-controller
 -include build/makelib/image.mk
 
 build.crossplane.package:
-	kubectl crossplane build provider -f ./package
+	kubectl crossplane build provider -f ./package --name provider-sql.xpkg
 
-push.crossplane.package: build.crossplane.package
-	kubectl crossplane push provider -f ./package/provider-sql-$(VERSION) alereca/provider-sql-controller-amd64:$(VERSION)
+push.crossplane.package: build publish build.crossplane.package
+	kubectl crossplane push provider -f ./package/provider-sql.xpkg alereca/provider-sql-controller-amd64:$(VERSION)
 
 fallthrough: submodules
 	@echo Initial setup complete. Running make again . . .
