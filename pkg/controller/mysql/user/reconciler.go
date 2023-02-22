@@ -53,7 +53,7 @@ const (
 	errCreateUser              = "cannot create user"
 	errDropUser                = "cannot drop user"
 	errUpdateUser              = "cannot update user"
-	errSetSqlLogBin            = "cannot set sql_log_bin = 0"
+	errSetSQLLogBin            = "cannot set sql_log_bin = 0"
 	errFlushPriv               = "cannot flush privileges"
 	errGetPasswordSecretFailed = "cannot get password secret"
 	errCompareResourceOptions  = "cannot compare desired and observed resource options"
@@ -286,7 +286,7 @@ func (c *external) executeCreateUserQuery(ctx context.Context, username string, 
 	if err := c.db.Exec(ctx, xsql.Query{
 		String: "SET sql_log_bin = 0",
 	}); err != nil {
-		return errors.Wrap(err, errSetSqlLogBin)
+		return errors.Wrap(err, errSetSQLLogBin)
 	}
 
 	query := fmt.Sprintf(
@@ -333,7 +333,7 @@ func (c *external) Update(ctx context.Context, mg resource.Managed) (managed.Ext
 		if err := c.db.Exec(ctx, xsql.Query{
 			String: "SET sql_log_bin = 0",
 		}); err != nil {
-			return managed.ExternalUpdate{}, errors.Wrap(err, errSetSqlLogBin)
+			return managed.ExternalUpdate{}, errors.Wrap(err, errSetSQLLogBin)
 		}
 
 		query := fmt.Sprintf(
@@ -388,18 +388,18 @@ func (c *external) UpdatePassword(ctx context.Context, cr *v1alpha1.User, userna
 	if err := c.db.Exec(ctx, xsql.Query{
 		String: "SET sql_log_bin = 0",
 	}); err != nil {
-		return managed.ConnectionDetails{}, errors.Wrap(err, errSetSqlLogBin)
+		return managed.ConnectionDetails{}, errors.Wrap(err, errSetSQLLogBin)
 	}
 
 	if pwchanged {
 		plugin := defaultAuthPlugin(cr.Spec.ForProvider.AuthPlugin)
+
 		query := fmt.Sprintf("ALTER USER %s@%s IDENTIFIED WITH %s AS %s",
 			mysql.QuoteValue(username),
 			mysql.QuoteValue(host),
 			plugin,
 			mysql.QuoteValue(pw),
 		)
-
 		if err := c.db.Exec(ctx, xsql.Query{
 			String: query,
 		}); err != nil {
@@ -439,7 +439,7 @@ func (c *external) Delete(ctx context.Context, mg resource.Managed) error {
 	if err := c.db.Exec(ctx, xsql.Query{
 		String: "SET sql_log_bin = 0",
 	}); err != nil {
-		return errors.Wrap(err, errSetSqlLogBin)
+		return errors.Wrap(err, errSetSQLLogBin)
 	}
 
 	if err := c.db.Exec(ctx, xsql.Query{
