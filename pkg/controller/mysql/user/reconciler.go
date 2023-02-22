@@ -386,15 +386,14 @@ func (c *external) UpdatePassword(ctx context.Context, cr *v1alpha1.User, userna
 		return managed.ConnectionDetails{}, err
 	}
 
-	if err := c.db.Exec(ctx, xsql.Query{
-		String: "SET sql_log_bin = 0",
-	}); err != nil {
-		return managed.ConnectionDetails{}, errors.Wrap(err, errSetSQLLogBin)
-	}
-
 	if pwchanged {
-		plugin := defaultAuthPlugin(cr.Spec.ForProvider.AuthPlugin)
+		if err := c.db.Exec(ctx, xsql.Query{
+			String: "SET sql_log_bin = 0",
+		}); err != nil {
+			return managed.ConnectionDetails{}, errors.Wrap(err, errSetSQLLogBin)
+		}
 
+		plugin := defaultAuthPlugin(cr.Spec.ForProvider.AuthPlugin)
 		query := fmt.Sprintf("ALTER USER %s@%s IDENTIFIED WITH %s AS %s",
 			mysql.QuoteValue(username),
 			mysql.QuoteValue(host),
