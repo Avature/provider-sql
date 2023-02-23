@@ -1,4 +1,4 @@
-module github.com/crossplane-contrib/provider-sql
+module github.com/Avature/provider-sql
 
 go 1.18
 
