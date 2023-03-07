@@ -54,6 +54,10 @@ type UserParameters struct {
 	// UsePassword indicate whether the provided AuthPlugin requires setting a password, defaults to true
 	// +optional
 	UsePassword *bool `json:"usePassword,omitempty" default:"true"`
+
+	// BinLog defines whether the create, delete, update operations of this user are propagated to replicaS. Defaults to true
+	// +optional
+	BinLog *bool `json:"replicate,omitempty" default:"true"`
 }
 
 // ResourceOptions define the account specific resource limits.

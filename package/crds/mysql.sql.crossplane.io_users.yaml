@@ -86,6 +86,11 @@ spec:
                     - name
                     - namespace
                     type: object
+                  replicate:
+                    description: BinLog defines whether the create, delete, update
+                      operations of this user are propagated to replicaS. Defaults
+                      to true
+                    type: boolean
                   resourceOptions:
                     description: ResourceOptions sets account specific resource limits.
                       See https://dev.mysql.com/doc/refman/8.0/en/user-resources.html
