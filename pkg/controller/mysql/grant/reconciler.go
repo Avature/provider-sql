@@ -25,6 +25,8 @@ import (
 	"time"
 
 	mysqldriver "github.com/go-sql-driver/mysql"
+	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
 	"github.com/pkg/errors"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -144,7 +146,7 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 	dbname := defaultIdentifier(cr.Spec.ForProvider.Database)
 	table := defaultIdentifier(cr.Spec.ForProvider.Table)
 
-	privileges, result, err := c.getPrivileges(ctx, user, dbname, table)
+	observedPrivileges, result, err := c.getPrivileges(ctx, user, dbname, table)
 	if err != nil {
 		return managed.ExternalObservation{}, err
 	}
@@ -152,18 +154,16 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 		return *result, nil
 	}
 
-	if !privilegesEqual(cr.Spec.ForProvider.Privileges.ToStringSlice(), privileges) {
-		return managed.ExternalObservation{
-			ResourceExists:   true,
-			ResourceUpToDate: false,
-		}, nil
-	}
+	cr.Status.AtProvider.Privileges = observedPrivileges
+
+	desiredPrivileges := cr.Spec.ForProvider.Privileges.ToStringSlice()
+	toGrant, toRevoke := diffPermissions(desiredPrivileges, observedPrivileges)
 
 	cr.SetConditions(xpv1.Available())
 
 	return managed.ExternalObservation{
 		ResourceExists:   true,
-		ResourceUpToDate: true,
+		ResourceUpToDate: len(toGrant) == 0 && len(toRevoke) == 0,
 	}, nil
 }
 
@@ -173,24 +173,6 @@ func defaultIdentifier(identifier *string) string {
 	}
 
 	return "*"
-}
-
-func privilegesEqual(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	sort.Strings(a)
-	sort.Strings(b)
-
-	for i := range a {
-		// Special case because ALL is an alias for "ALL PRIVILEGES"
-		strA := strings.ReplaceAll(a[i], allPrivileges, "ALL")
-		strB := strings.ReplaceAll(b[i], allPrivileges, "ALL")
-		if strA != strB {
-			return false
-		}
-	}
-	return true
 }
 
 func parseGrant(grant, dbname string, table string) (privileges []string) {
@@ -225,7 +207,7 @@ func (c *external) getPrivileges(ctx context.Context, username, dbname string, t
 	// In mysql when all grants are revoked from user, it still grants usage (meaning no privileges) on *.*
 	// So the grant can be considered as non existent, just like when privileges slice is nil/empty
 	// https://dev.mysql.com/doc/refman/8.0/en/privileges-provided.html#priv_usage
-	if privileges == nil || privilegesEqual(privileges, []string{"USAGE"}) {
+	if diff := cmp.Diff(privileges, []string{"USAGE"}, equateSlices()...); privileges == nil || diff == "" {
 		return nil, &managed.ExternalObservation{ResourceExists: false}, nil
 	}
 
@@ -306,40 +288,65 @@ func (c *external) Update(ctx context.Context, mg resource.Managed) (managed.Ext
 	dbname := defaultIdentifier(cr.Spec.ForProvider.Database)
 	table := defaultIdentifier(cr.Spec.ForProvider.Table)
 
-	privileges := strings.Join(cr.Spec.ForProvider.Privileges.ToStringSlice(), ", ")
 	username, host := mysql.SplitUserHost(user)
-
 	binlog := defaultBinlog(cr.Spec.ForProvider.BinLog)
-	if !binlog {
-		if err := c.db.Exec(ctx, xsql.Query{
-			String: "SET sql_log_bin = 0",
-		}); err != nil {
-			return managed.ExternalUpdate{}, errors.Wrap(err, errSetSQLLogBin)
+
+	observed := cr.Status.AtProvider.Privileges
+	desired := cr.Spec.ForProvider.Privileges.ToStringSlice()
+	toGrant, toRevoke := diffPermissions(desired, observed)
+
+	if len(toRevoke) > 0 {
+		if !binlog {
+			if err := c.db.Exec(ctx, xsql.Query{
+				String: "SET sql_log_bin = 0",
+			}); err != nil {
+				return managed.ExternalUpdate{}, errors.Wrap(err, errSetSQLLogBin)
+			}
+		}
+
+		sort.Strings(toRevoke)
+		query := fmt.Sprintf("REVOKE %s ON %s.%s FROM %s@%s",
+			strings.Join(toRevoke, ", "),
+			dbname,
+			table,
+			mysql.QuoteValue(username),
+			mysql.QuoteValue(host),
+		)
+
+		if err := c.db.Exec(ctx, xsql.Query{String: query}); err != nil {
+			return managed.ExternalUpdate{}, errors.Wrap(err, errRevokeGrant)
+		}
+
+		if err := c.db.Exec(ctx, xsql.Query{String: "FLUSH PRIVILEGES"}); err != nil {
+			return managed.ExternalUpdate{}, errors.Wrap(err, errFlushPriv)
 		}
 	}
 
-	// Remove current grants since it's not possible to update grants.
-	// This might leave applications with no access to the DB for a short time
-	// until the privileges are granted again.
-	// Using a transaction is unfortunately not possible because a GRANT triggers
-	// an implicit commit: https://dev.mysql.com/doc/refman/8.0/en/implicit-commit.html
-	query := fmt.Sprintf("REVOKE ALL ON %s.%s FROM %s@%s",
-		dbname,
-		table,
-		mysql.QuoteValue(username),
-		mysql.QuoteValue(host),
-	)
-	if err := c.db.Exec(ctx, xsql.Query{String: query}); err != nil {
-		return managed.ExternalUpdate{}, errors.Wrap(err, errRevokeGrant)
-	}
+	if len(toGrant) > 0 {
+		if !binlog {
+			if err := c.db.Exec(ctx, xsql.Query{
+				String: "SET sql_log_bin = 0",
+			}); err != nil {
+				return managed.ExternalUpdate{}, errors.Wrap(err, errSetSQLLogBin)
+			}
+		}
 
-	query = createGrantQuery(privileges, dbname, user, table)
-	if err := c.db.Exec(ctx, xsql.Query{String: query}); err != nil {
-		return managed.ExternalUpdate{}, err
-	}
+		sort.Strings(toGrant)
+		query := fmt.Sprintf("GRANT %s ON %s.%s TO %s@%s",
+			strings.Join(toGrant, ", "),
+			dbname,
+			table,
+			mysql.QuoteValue(username),
+			mysql.QuoteValue(host),
+		)
 
-	if err := c.db.Exec(ctx, xsql.Query{String: "FLUSH PRIVILEGES"}); err != nil {
-		return managed.ExternalUpdate{}, errors.Wrap(err, errFlushPriv)
+		if err := c.db.Exec(ctx, xsql.Query{String: query}); err != nil {
+			return managed.ExternalUpdate{}, errors.Wrap(err, errCreateGrant)
+		}
+
+		if err := c.db.Exec(ctx, xsql.Query{String: "FLUSH PRIVILEGES"}); err != nil {
+			return managed.ExternalUpdate{}, errors.Wrap(err, errFlushPriv)
+		}
 	}
 
 	return managed.ExternalUpdate{}, nil
@@ -412,4 +419,51 @@ func defaultBinlog(binlog *bool) bool {
 	}
 
 	return *binlog
+}
+
+func diffPermissions(desired, observed []string) ([]string, []string) {
+	desiredMap := make(map[string]struct{}, len(desired))
+	observedMap := make(map[string]struct{}, len(observed))
+
+	for _, desiredPrivilege := range desired {
+		// Special case because ALL is an alias for "ALL PRIVILEGES"
+		desiredPrivilegeMapped := strings.ReplaceAll(desiredPrivilege, allPrivileges, "ALL")
+		desiredMap[desiredPrivilegeMapped] = struct{}{}
+	}
+	for _, observedPrivilege := range observed {
+		// Special case because ALL is an alias for "ALL PRIVILEGES"
+		observedPrivilegeMapped := strings.ReplaceAll(observedPrivilege, allPrivileges, "ALL")
+		observedMap[observedPrivilegeMapped] = struct{}{}
+	}
+
+	var toGrant []string
+	var toRevoke []string
+
+	for desiredPrivilege := range desiredMap {
+		if _, ok := observedMap[desiredPrivilege]; !ok {
+			toGrant = append(toGrant, desiredPrivilege)
+		}
+	}
+
+	for observedPrivilege := range observedMap {
+		if _, ok := desiredMap[observedPrivilege]; !ok {
+			toRevoke = append(toRevoke, observedPrivilege)
+		}
+	}
+
+	return toGrant, toRevoke
+}
+
+func equateSlices() []cmp.Option {
+	return []cmp.Option{
+		cmp.Transformer("mapAllPrivileges", func(s string) string {
+			if s == "ALL PRIVILEGES" {
+				return "ALL"
+			}
+			return s
+		}),
+		cmpopts.SortSlices(func(x, y string) bool {
+			return x < y
+		}),
+	}
 }
