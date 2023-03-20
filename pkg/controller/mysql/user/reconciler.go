@@ -451,12 +451,6 @@ func (c *external) executeAlterUserQuery(ctx context.Context, username string, h
 		return errors.Wrap(err, errUpdateUser)
 	}
 
-	if err := c.db.Exec(ctx, xsql.Query{
-		String: "FLUSH PRIVILEGES",
-	}); err != nil {
-		return errors.Wrap(err, errFlushPriv)
-	}
-
 	return nil
 }
 
