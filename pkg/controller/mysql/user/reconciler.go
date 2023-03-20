@@ -429,12 +429,9 @@ func (c *external) executeAlterUserQuery(ctx context.Context, username string, h
 		resourceOptions = fmt.Sprintf(" WITH %s", strings.Join(resourceOptionsClauses, " "))
 	}
 
+	queries := []string{}
 	if !binlog {
-		if err := c.db.Exec(ctx, xsql.Query{
-			String: "SET sql_log_bin = 0",
-		}); err != nil {
-			return errors.Wrap(err, errSetSQLLogBin)
-		}
+		queries = append(queries, "SET sql_log_bin = 0")
 	}
 
 	query := fmt.Sprintf("ALTER USER %s@%s IDENTIFIED WITH %s%s%s",
@@ -444,17 +441,12 @@ func (c *external) executeAlterUserQuery(ctx context.Context, username string, h
 		passwordSection,
 		resourceOptions,
 	)
+	queries = append(queries, query, "FLUSH PRIVILEGES")
 
 	if err := c.db.Exec(ctx, xsql.Query{
-		String: query,
+		String: strings.Join(queries, ";"),
 	}); err != nil {
 		return errors.Wrap(err, errUpdateUser)
-	}
-
-	if err := c.db.Exec(ctx, xsql.Query{
-		String: "FLUSH PRIVILEGES",
-	}); err != nil {
-		return errors.Wrap(err, errFlushPriv)
 	}
 
 	return nil
