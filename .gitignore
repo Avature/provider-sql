@@ -9,3 +9,5 @@ _output
 __debug_bin
 
 *.xpkg
+
+*.env

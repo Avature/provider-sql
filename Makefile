@@ -1,4 +1,9 @@
 # ====================================================================================
+# Export DOCKER_REGISTRY value from .env file
+ENVFILE = .env
+include $(ENVFILE)
+export $(shell sed '/^\#/d; s/=.*//' $(ENVFILE))
+
 # Setup Project
 PROJECT_NAME := provider-sql
 PROJECT_REPO := github.com/crossplane-contrib/$(PROJECT_NAME)
@@ -22,13 +27,13 @@ GO111MODULE = on
 -include build/makelib/k8s_tools.mk
 
 # Setup Images
-DOCKER_REGISTRY ?= alereca
 IMAGES = $(PROJECT_NAME) $(PROJECT_NAME)-controller
 -include build/makelib/image.mk
 
 push: build publish
-	docker push alereca/provider-sql-amd64:$(VERSION)
-	docker push alereca/provider-sql-controller-amd64:$(VERSION)
+	docker login $(DOCKER_REGISTRY)
+	docker push $(DOCKER_REGISTRY)/$(PROJECT_NAME)-amd64:$(VERSION)
+	docker push $(DOCKER_REGISTRY)/$(PROJECT_NAME)-controller-amd64:$(VERSION)
 
 fallthrough: submodules
 	@echo Initial setup complete. Running make again . . .
