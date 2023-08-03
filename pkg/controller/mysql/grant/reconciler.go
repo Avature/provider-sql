@@ -254,7 +254,7 @@ func (c *external) Create(ctx context.Context, mg resource.Managed) (managed.Ext
 	dbname := defaultIdentifier(cr.Spec.ForProvider.Database)
 	table := defaultIdentifier(cr.Spec.ForProvider.Table)
 
-	privileges := strings.Join(cr.Spec.ForProvider.Privileges.ToStringSlice(), ", ")
+	privileges := cr.Spec.ForProvider.Privileges.ToStringSlice()
 
 	binlog := defaultBinlog(cr.Spec.ForProvider.BinLog)
 	if !binlog {
@@ -304,13 +304,7 @@ func (c *external) Update(ctx context.Context, mg resource.Managed) (managed.Ext
 		}
 
 		sort.Strings(toRevoke)
-		query := fmt.Sprintf("REVOKE %s ON %s.%s FROM %s@%s",
-			strings.Join(toRevoke, ", "),
-			dbname,
-			table,
-			mysql.QuoteValue(username),
-			mysql.QuoteValue(host),
-		)
+		query := revokeGrantQuery(toRevoke, dbname, table, username, host)
 
 		if err := c.db.Exec(ctx, xsql.Query{String: query}); err != nil {
 			return managed.ExternalUpdate{}, errors.Wrap(err, errRevokeGrant)
@@ -331,13 +325,7 @@ func (c *external) Update(ctx context.Context, mg resource.Managed) (managed.Ext
 		}
 
 		sort.Strings(toGrant)
-		query := fmt.Sprintf("GRANT %s ON %s.%s TO %s@%s",
-			strings.Join(toGrant, ", "),
-			dbname,
-			table,
-			mysql.QuoteValue(username),
-			mysql.QuoteValue(host),
-		)
+		query := createGrantQuery(toGrant, dbname, user, table)
 
 		if err := c.db.Exec(ctx, xsql.Query{String: query}); err != nil {
 			return managed.ExternalUpdate{}, errors.Wrap(err, errCreateGrant)
@@ -351,15 +339,46 @@ func (c *external) Update(ctx context.Context, mg resource.Managed) (managed.Ext
 	return managed.ExternalUpdate{}, nil
 }
 
-func createGrantQuery(privileges, dbname, user string, table string) string {
-	username, host := mysql.SplitUserHost(user)
-	result := fmt.Sprintf("GRANT %s ON %s.%s TO %s@%s",
-		privileges,
+func revokeGrantQuery(privileges []string, dbname string, table string, username string, host string) string {
+	query := fmt.Sprintf("REVOKE %s ON %s.%s FROM %s@%s",
+		strings.Join(privileges, ", "),
 		dbname,
 		table,
 		mysql.QuoteValue(username),
 		mysql.QuoteValue(host),
 	)
+	return query
+}
+
+// getPrivilegesString returns a privileges string without grant option item and a grantOption boolean
+func getPrivilegesString(privileges []string) (string, bool) {
+	privilegesWithoutGrantOption := v1alpha1.GrantPrivileges{}
+	grantOption := false
+	for _, p := range privileges {
+		if string(p) == "GRANT OPTION" {
+			grantOption = true
+			continue
+		}
+		privilegesWithoutGrantOption = append(privilegesWithoutGrantOption, v1alpha1.GrantPrivilege(p))
+	}
+	privilegesWithoutGrantOptionString := strings.Join(privilegesWithoutGrantOption.ToStringSlice(), ", ")
+	return privilegesWithoutGrantOptionString, grantOption
+}
+
+func createGrantQuery(privileges []string, dbname, user string, table string) string {
+	username, host := mysql.SplitUserHost(user)
+	privilegesString, grantOption := getPrivilegesString(privileges)
+	result := fmt.Sprintf("GRANT %s ON %s.%s TO %s@%s",
+		privilegesString,
+		dbname,
+		table,
+		mysql.QuoteValue(username),
+		mysql.QuoteValue(host),
+	)
+
+	if grantOption {
+		result = fmt.Sprintf("%s WITH GRANT OPTION", result)
+	}
 
 	return result
 }
@@ -376,7 +395,7 @@ func (c *external) Delete(ctx context.Context, mg resource.Managed) error {
 	dbname := defaultIdentifier(cr.Spec.ForProvider.Database)
 	table := defaultIdentifier(cr.Spec.ForProvider.Table)
 
-	privileges := strings.Join(cr.Spec.ForProvider.Privileges.ToStringSlice(), ", ")
+	privileges := cr.Spec.ForProvider.Privileges.ToStringSlice()
 	username, host := mysql.SplitUserHost(user)
 
 	binlog := defaultBinlog(cr.Spec.ForProvider.BinLog)
@@ -388,13 +407,7 @@ func (c *external) Delete(ctx context.Context, mg resource.Managed) error {
 		}
 	}
 
-	query := fmt.Sprintf("REVOKE %s ON %s.%s FROM %s@%s",
-		privileges,
-		dbname,
-		table,
-		mysql.QuoteValue(username),
-		mysql.QuoteValue(host),
-	)
+	query := revokeGrantQuery(privileges, dbname, table, username, host)
 
 	if err := c.db.Exec(ctx, xsql.Query{String: query}); err != nil {
 		var myErr *mysqldriver.MySQLError
